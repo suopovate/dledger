@@ -32,10 +32,26 @@ import static io.openmessaging.storage.dledger.MemberState.Role.CANDIDATE;
 import static io.openmessaging.storage.dledger.MemberState.Role.FOLLOWER;
 import static io.openmessaging.storage.dledger.MemberState.Role.LEADER;
 
+/**
+ * 节点的状态
+ * 1. raft协议规定的运行时状态字段
+ * 2. raft协议规定的持久化状态字段
+ * 3. 集群的基本信息
+ * 4. 其他状态信息
+ */
 public class MemberState {
 
+    /**
+     * 用于存储持久化的状态数据
+     */
     public static final String TERM_PERSIST_FILE = "currterm";
+    /**
+     * 持久化 - 属性字段：当前的term
+     */
     public static final String TERM_PERSIST_KEY_TERM = "currTerm";
+    /**
+     * 持久化 - 属性字段：当前节点投票的leader
+     */
     public static final String TERM_PERSIST_KEY_VOTE_FOR = "voteLeader";
 
     public static Logger logger = LoggerFactory.getLogger(MemberState.class);
@@ -43,6 +59,7 @@ public class MemberState {
     private final ReentrantLock defaultLock = new ReentrantLock();
 
     // basic cluster info
+    // 这些字段，并不是raft协议中规定的，整个集群的基本信息。
     public final DLedgerConfig dLedgerConfig;
     private final String group;
     private final String selfId;
@@ -51,14 +68,31 @@ public class MemberState {
     private final Map<String, Boolean> peersLiveTable = new ConcurrentHashMap<>();
 
     // volatile states for all servers
+    // 这些是运行时状态，不持久化，运行时加载。
+    /**
+     * 当前节点的角色，默认直接就是candidate?不应该先从follower开始么
+     */
     private volatile Role role = CANDIDATE;
+    /**
+     * 当前集群的leader节点的id
+     */
     private volatile String leaderId;
+    /**
+     * 日志提交的位置
+     */
     private volatile long committedIndex = -1;
+    /**
+     * 最后一条日志已经被应用到状态机的位置
+     */
     private volatile long appliedIndex = -1;
 
+    /**
+     * 最后一条日志已经被应用到状态机的term
+     */
     private volatile long appliedTerm = -1;
 
     // persistent states for all servers
+    // 这些是持久化的数据
     private volatile long currTerm = 0;
     private volatile String currVoteFor;
 

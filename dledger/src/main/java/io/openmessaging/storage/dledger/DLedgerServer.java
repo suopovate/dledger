@@ -90,14 +90,35 @@ public class DLedgerServer extends AbstractDLedgerServer {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(DLedgerServer.class);
 
+    /**
+     * 节点状态
+     */
     private final MemberState memberState;
+    /**
+     * 配置
+     */
     private final DLedgerConfig dLedgerConfig;
 
+    /**
+     * 存储引擎
+     */
     private final DLedgerStore dLedgerStore;
+    /**
+     * 网络组件
+     */
     private final DLedgerRpcService dLedgerRpcService;
 
+    /**
+     *
+     */
     private final RpcServiceMode rpcServiceMode;
+    /**
+     *
+     */
     private final DLedgerEntryPusher dLedgerEntryPusher;
+    /**
+     * 选举器
+     */
     private final DLedgerLeaderElector dLedgerLeaderElector;
 
     private final ScheduledExecutorService executorService;
