@@ -31,14 +31,31 @@ import java.util.concurrent.CompletableFuture;
 
 public interface DLedgerRaftProtocol {
 
+    /**
+     * 成为candidata时：请求其他节点为自己投票
+     */
     CompletableFuture<VoteResponse> vote(VoteRequest request) throws Exception;
 
+    /**
+     * 成为leader时：向其他节点维持心跳
+     */
     CompletableFuture<HeartBeatResponse> heartBeat(HeartBeatRequest request) throws Exception;
 
+    /**
+     * 这个，应该没用到吧，好像也不是raft论文里的做法，因为主节点不会去从节点拉数据的，主节点数据永远比从节点新！
+     * 而从节点，也不应该主动向主节点拉取数据，而是主节点会定时心跳，传递数据。
+     * 以上言论待定，应该也是可以从节点去拉数据的。
+     */
     CompletableFuture<PullEntriesResponse> pull(PullEntriesRequest request) throws Exception;
 
+    /**
+     * 主节点向从节点推送数据
+     */
     CompletableFuture<PushEntryResponse> push(PushEntryRequest request) throws Exception;
 
+    /**
+     * 快照机制，暂时还不理解
+     */
     CompletableFuture<InstallSnapshotResponse> installSnapshot(InstallSnapshotRequest request) throws Exception;
 
 }

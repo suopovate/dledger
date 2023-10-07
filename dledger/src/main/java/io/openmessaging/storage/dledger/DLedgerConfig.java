@@ -57,6 +57,10 @@ public class DLedgerConfig {
 
     private int maxPushTimeOutMs = 1000;
 
+    /**
+     * 是否开启leader选举功能，即当前节点具备选举和角色切换的能力，不开启的话，本节点就不会主动切换角色，或者维护当前角色。
+     * false: 估计就是永远都是follow?
+     */
     private boolean enableLeaderElector = true;
 
     private int heartBeatTimeIntervalMs = 2000;

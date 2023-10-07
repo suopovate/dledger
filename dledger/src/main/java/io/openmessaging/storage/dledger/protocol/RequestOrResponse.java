@@ -18,8 +18,17 @@ package io.openmessaging.storage.dledger.protocol;
 
 public class RequestOrResponse {
 
+    /**
+     * 集群组
+     */
     protected String group;
+    /**
+     * 被调用节点的id
+     */
     protected String remoteId;
+    /**
+     * 本地节点的id
+     */
     protected String localId;
 
     protected int code = DLedgerResponseCode.SUCCESS.getCode();

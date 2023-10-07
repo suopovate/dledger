@@ -86,25 +86,45 @@ import org.slf4j.LoggerFactory;
 
 import static io.openmessaging.storage.dledger.metrics.DLedgerMetricsConstant.LABEL_READ_MODE;
 
+/**
+ * raft中的服务的角色
+ * 服务应该包含以下模块：
+ * 1. 日志存储模块
+ * 2. server的属性维护模块
+ *    a. 公共属性
+ *    b. leader专有属性
+ *    c. 兼顾对当前server所处角色的状态维护(leader、candidate、follower)
+ * 3. 每个server都关联一个状态机
+ * 3. 心跳、日志replica模块
+ * 4. Leader选举模块
+ * 5. 集群成员变更模块
+ * 6. 日志压缩模块
+ */
 public class DLedgerServer extends AbstractDLedgerServer {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(DLedgerServer.class);
 
     /**
-     * 节点状态
+     * raft中的属性
+     *
+     * Server属性 + 其他的一些属性
      */
     private final MemberState memberState;
     /**
-     * 配置
+     * 一些应用基本配置信息，可能会涉及到dledger程序的各个方面
      */
     private final DLedgerConfig dLedgerConfig;
 
     /**
+     * raft中的log
+     *
      * 存储引擎
      */
     private final DLedgerStore dLedgerStore;
+
     /**
      * 网络组件
+     * 用于处理其他服务的请求 + 向其他服务发起请求
      */
     private final DLedgerRpcService dLedgerRpcService;
 
@@ -112,12 +132,22 @@ public class DLedgerServer extends AbstractDLedgerServer {
      *
      */
     private final RpcServiceMode rpcServiceMode;
+
     /**
+     * raft 中负责心跳、日志复制的模块。
      *
+     * 数据同步器(主要负责主节点与从节点的数据同步)
+     *
+     * 专门有个线程处理。
      */
     private final DLedgerEntryPusher dLedgerEntryPusher;
+
     /**
-     * 选举器
+     * raft 中负责选举的模块。
+     *
+     * 选举器(基于每个节点的memberState，处理跟选举相关的所有逻辑)
+     *
+     * 专门有个线程处理。
      */
     private final DLedgerLeaderElector dLedgerLeaderElector;
 
@@ -125,6 +155,9 @@ public class DLedgerServer extends AbstractDLedgerServer {
 
     private FastAdvanceCommitIndexService fastAdvanceCommitIndexService;
 
+    /**
+     * raft中的状态机模块，这里主要是作为一个中转站，把节点的一些日志新增等事件，转发给状态机并执行
+     */
     private StateMachineCaller fsmCaller;
 
     private volatile boolean isStarted = false;
@@ -169,10 +202,7 @@ public class DLedgerServer extends AbstractDLedgerServer {
     }
 
     /**
-     * Start in proxy mode, use shared DLedgerRpcService
      *
-     * @param dLedgerConfig     DLedgerConfig
-     * @param dLedgerRpcService Shared DLedgerRpcService
      */
     public DLedgerServer(DLedgerConfig dLedgerConfig, DLedgerRpcService dLedgerRpcService) {
         this.dLedgerConfig = dLedgerConfig;
@@ -441,13 +471,17 @@ public class DLedgerServer extends AbstractDLedgerServer {
         PreConditions.check(memberState.isLeader(), DLedgerResponseCode.NOT_LEADER);
         PreConditions.check(memberState.getTransferee() == null, DLedgerResponseCode.LEADER_TRANSFERRING);
         long currTerm = memberState.currTerm();
+        // 有一定的限制，防止超出系统承受能力，默认最多同时存在1万条等待同步的消息
         if (dLedgerEntryPusher.isPendingFull(currTerm)) {
             closure.done(Status.error(DLedgerResponseCode.LEADER_PENDING_FULL));
             return;
         }
         DLedgerEntry dLedgerEntry = new DLedgerEntry();
         dLedgerEntry.setBody(task.getBody());
+        // 将日志写入存储引擎
         DLedgerEntry entry = dLedgerStore.appendAsLeader(dLedgerEntry);
+        // 向follower节点同步数据的数据同步器
+        // 结构：k: term v: Map - index closure
         dLedgerEntryPusher.appendClosure(closure, entry.getTerm(), entry.getIndex());
     }
 

@@ -38,6 +38,9 @@ import java.util.concurrent.TimeUnit;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+/**
+ * 用于发起请求
+ */
 public class DLedgerClient {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(DLedgerClient.class);
@@ -78,6 +81,7 @@ public class DLedgerClient {
             }
             return response;
         } catch (Exception e) {
+            // 异常-归为内部错误
             needFreshMetadata();
             LOGGER.error("Append error", e);
             AppendEntryResponse appendEntryResponse = new AppendEntryResponse();

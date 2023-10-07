@@ -64,6 +64,9 @@ import org.slf4j.LoggerFactory;
 
 import static io.openmessaging.storage.dledger.metrics.DLedgerMetricsConstant.LABEL_REMOTE_ID;
 
+/**
+ * 数据同步器(主要负责主节点与从节点的数据同步)
+ */
 public class DLedgerEntryPusher {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(DLedgerEntryPusher.class);
@@ -75,6 +78,10 @@ public class DLedgerEntryPusher {
 
     private final DLedgerRpcService dLedgerRpcService;
 
+    /**
+     * 这个表记录的应该就是 集群中 其他节点的一个同步情况
+     * 对应论文中的 peers
+     */
     private final Map<Long/*term*/, ConcurrentMap<String/*peer id*/, Long/*match index*/>> peerWaterMarksByTerm = new ConcurrentHashMap<>();
 
     private final Map<Long/*term*/, ConcurrentMap<Long/*index*/, Closure/*upper callback*/>> pendingClosure = new ConcurrentHashMap<>();
@@ -276,7 +283,7 @@ public class DLedgerEntryPusher {
                         memberState.getSelfId(), memberState.getRole(), memberState.currTerm(), dLedgerStore.getLedgerBeforeBeginIndex(), dLedgerStore.getLedgerEndIndex(), memberState.getCommittedIndex(), JSON.toJSONString(peerWaterMarksByTerm), memberState.getAppliedIndex());
                     lastPrintWatermarkTimeMs = System.currentTimeMillis();
                 }
-                
+
                 long currTerm = memberState.currTerm();
                 checkTermForPendingMap(currTerm, "QuorumAckChecker");
                 checkTermForWaterMark(currTerm, "QuorumAckChecker");

@@ -35,6 +35,10 @@ public class DLedgerMemoryStore extends DLedgerStore {
     private long ledgerBeforeBeginIndex = -1;
     private long ledgerEndIndex = -1;
     private long ledgerEndTerm;
+    /**
+     * 存储所有的数据
+     * k: index v: 数据项
+     */
     private final Map<Long, DLedgerEntry> cachedEntries = new ConcurrentHashMap<>();
 
     private final DLedgerConfig dLedgerConfig;
@@ -57,7 +61,9 @@ public class DLedgerMemoryStore extends DLedgerStore {
             PreConditions.check(memberState.isLeader(), DLedgerResponseCode.NOT_LEADER);
             PreConditions.check(memberState.getTransferee() == null, DLedgerResponseCode.LEADER_TRANSFERRING);
             ledgerEndIndex++;
+            // 使用当前状态机记录的term来作为插入entry的term
             ledgerEndTerm = memberState.currTerm();
+            // index在插入时动态递增
             entry.setIndex(ledgerEndIndex);
             entry.setTerm(memberState.currTerm());
             if (LOGGER.isDebugEnabled()) {

@@ -18,6 +18,9 @@ package io.openmessaging.storage.dledger.protocol;
 
 import java.util.Map;
 
+/**
+ * 元信息 也就是 raft中的配置
+ */
 public class MetadataResponse extends RequestOrResponse {
 
     private Map<String, String> peers;

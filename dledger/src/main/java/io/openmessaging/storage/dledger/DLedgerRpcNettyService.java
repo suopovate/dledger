@@ -112,7 +112,7 @@ public class DLedgerRpcNettyService extends DLedgerRpcService {
             nettyServerConfig = new NettyServerConfig();
         }
         nettyServerConfig.setListenPort(Integer.parseInt(address.split(":")[1]));
-        this.remotingServer = registerRemotingServer(nettyServerConfig, channelEventListener, protocolProcessor);
+        this.remotingServer = initRemotingServer(nettyServerConfig, channelEventListener, protocolProcessor);
         //start the remoting client
         if (nettyClientConfig == null) {
             nettyClientConfig = new NettyClientConfig();
@@ -138,7 +138,7 @@ public class DLedgerRpcNettyService extends DLedgerRpcService {
         remotingServer.registerProcessor(DLedgerRequestCode.INSTALL_SNAPSHOT.getCode(), protocolProcessor, null);
     }
 
-    private NettyRemotingServer registerRemotingServer(NettyServerConfig nettyServerConfig, ChannelEventListener channelEventListener, NettyRequestProcessor protocolProcessor) {
+    private NettyRemotingServer initRemotingServer(NettyServerConfig nettyServerConfig, ChannelEventListener channelEventListener, NettyRequestProcessor protocolProcessor) {
         NettyRemotingServer remotingServer = new NettyRemotingServer(nettyServerConfig, channelEventListener);
         registerProcessor(remotingServer, protocolProcessor);
         return remotingServer;

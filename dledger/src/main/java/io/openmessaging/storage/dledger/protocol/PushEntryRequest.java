@@ -21,6 +21,9 @@ import io.openmessaging.storage.dledger.utils.PreConditions;
 import java.util.ArrayList;
 import java.util.List;
 
+/**
+ * 同步数据的请求
+ */
 public class PushEntryRequest extends RequestOrResponse {
     private long preLogIndex = -1;
     private long preLogTerm = -1;

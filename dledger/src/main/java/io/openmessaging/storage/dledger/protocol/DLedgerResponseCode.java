@@ -36,6 +36,9 @@ public enum DLedgerResponseCode {
     INCONSISTENT_STATE(406, ""),
     INCONSISTENT_TERM(407, ""),
     INCONSISTENT_INDEX(408, ""),
+    /**
+     * 从节点已经有leader了，然后新请求过来的时候对应的Leader不是当前从节点的leader，也就是说出现了leader不一致的情况。
+     */
     INCONSISTENT_LEADER(409, ""),
     INDEX_OUT_OF_RANGE(410, ""),
     UNEXPECTED_ARGUMENT(411, ""),

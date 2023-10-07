@@ -19,6 +19,10 @@ package io.openmessaging.storage.dledger.protocol;
 public class LeadershipTransferRequest extends RequestOrResponse {
 
     private String transferId;
+    /**
+     * 成为leader的一方
+     * 受让方 id
+     */
     private String transfereeId;
     private long takeLeadershipLedgerIndex;
 
