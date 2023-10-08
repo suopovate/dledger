@@ -28,13 +28,8 @@ import io.openmessaging.storage.dledger.protocol.VoteResponse;
 import io.openmessaging.storage.dledger.utils.DLedgerUtils;
 
 import java.sql.Timestamp;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
-import java.util.Random;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
+import java.util.*;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -250,28 +245,33 @@ public class DLedgerLeaderElector {
     public CompletableFuture<VoteResponse> handleVote(VoteRequest request, boolean self) {
         //hold the lock to get the latest term, leaderId, ledgerEndIndex
         synchronized (memberState) {
+            // 集群成员安全性校验
             if (!memberState.isPeerMember(request.getLeaderId())) {
                 LOGGER.warn("[BUG] [HandleVote] remoteId={} is an unknown member", request.getLeaderId());
                 return CompletableFuture.completedFuture(new VoteResponse(request).term(memberState.currTerm()).voteResult(VoteResponse.RESULT.REJECT_UNKNOWN_LEADER));
             }
+            // 集群成员安全性校验，防止两个相同节点id的情况，怎么会出现这种情况...误配置?
             if (!self && memberState.getSelfId().equals(request.getLeaderId())) {
                 LOGGER.warn("[BUG] [HandleVote] selfId={} but remoteId={}", memberState.getSelfId(), request.getLeaderId());
                 return CompletableFuture.completedFuture(new VoteResponse(request).term(memberState.currTerm()).voteResult(VoteResponse.RESULT.REJECT_UNEXPECTED_LEADER));
             }
 
+            // 日志数据的完整性检验，候选者数据必须比当前节点新
             if (request.getLedgerEndTerm() < memberState.getLedgerEndTerm()) {
+                // 候选者朝代小了，数据落后，出局
                 return CompletableFuture.completedFuture(new VoteResponse(request).term(memberState.currTerm()).voteResult(VoteResponse.RESULT.REJECT_EXPIRED_LEDGER_TERM));
             } else if (request.getLedgerEndTerm() == memberState.getLedgerEndTerm() && request.getLedgerEndIndex() < memberState.getLedgerEndIndex()) {
+                // 候选者朝代一致，但是最后一条日志的索引，没当前节点的最尾日志索引大，数据落后了，出局。
                 return CompletableFuture.completedFuture(new VoteResponse(request).term(memberState.currTerm()).voteResult(VoteResponse.RESULT.REJECT_SMALL_LEDGER_END_INDEX));
             }
 
+            // 节点的term检测
             if (request.getTerm() < memberState.currTerm()) {
                 return CompletableFuture.completedFuture(new VoteResponse(request).term(memberState.currTerm()).voteResult(VoteResponse.RESULT.REJECT_EXPIRED_VOTE_TERM));
             } else if (request.getTerm() == memberState.currTerm()) {
-                if (memberState.currVoteFor() == null) {
+                if (memberState.currVoteFor() == null || memberState.currVoteFor().equals(request.getLeaderId())) {
                     //let it go
-                } else if (memberState.currVoteFor().equals(request.getLeaderId())) {
-                    //repeat just let it go
+                    //or repeat request, just let it go
                 } else {
                     if (memberState.getLeaderId() != null) {
                         return CompletableFuture.completedFuture(new VoteResponse(request).term(memberState.currTerm()).voteResult(VoteResponse.RESULT.REJECT_ALREADY_HAS_LEADER));
@@ -378,7 +378,7 @@ public class DLedgerLeaderElector {
         Thread.sleep(voteResultWaitTime);
 
         //abnormal case, deal with it immediately
-        // 如果某个节点返回的term大于了当前term，即刻降级s
+        // 如果某个节点返回的term大于了当前term，即刻降级
         if (maxTerm.get() > term) {
             LOGGER.warn("[{}] currentTerm{} is not the biggest={}, deal with it", memberState.getSelfId(), term, maxTerm.get());
             changeRoleToCandidate(maxTerm.get());
@@ -464,6 +464,9 @@ public class DLedgerLeaderElector {
         return false;
     }
 
+    /**
+     * 获取下一次发起投票的时间
+     */
     private long getNextTimeToRequestVote() {
         if (isTakingLeadership()) {
             return System.currentTimeMillis() + dLedgerConfig.getMinTakeLeadershipVoteIntervalMs() +
@@ -475,23 +478,31 @@ public class DLedgerLeaderElector {
     private void maintainAsCandidate() throws Exception {
         //for candidate
         // 如果还没到下一次发起选举的时间 或者 不需要立刻升级term，就直接退出。
+        // 但是只要 到了 选举时间 或者 立马升级标志，就可以进入选举环节。
         if (System.currentTimeMillis() < nextTimeToRequestVote && !needIncreaseTermImmediately) {
             return;
         }
+        // 记录当前发起选举所应处的term
         long term;
+        // 当前节点日志的最尾term
         long ledgerEndTerm;
+        // 当前节点日志的最尾term
         long ledgerEndIndex;
         if (!memberState.isCandidate()) {
             return;
         }
+        // 加锁更新和获取term、获取当前最尾日志的数据
         synchronized (memberState) {
             if (!memberState.isCandidate()) {
                 return;
             }
             if (lastParseResult == VoteResponse.ParseResult.WAIT_TO_VOTE_NEXT || needIncreaseTermImmediately) {
+                // 记录当前的term
                 long prevTerm = memberState.currTerm();
+                // 更新term
                 term = memberState.nextTerm();
                 LOGGER.info("{}_[INCREASE_TERM] from {} to {}", memberState.getSelfId(), prevTerm, term);
+                // 等待重新vote
                 lastParseResult = VoteResponse.ParseResult.WAIT_TO_REVOTE;
             } else {
                 term = memberState.currTerm();
@@ -499,6 +510,7 @@ public class DLedgerLeaderElector {
             ledgerEndIndex = memberState.getLedgerEndIndex();
             ledgerEndTerm = memberState.getLedgerEndTerm();
         }
+        // 这个标志的作用只是为了增加term，然后下次再进行选举
         if (needIncreaseTermImmediately) {
             nextTimeToRequestVote = getNextTimeToRequestVote();
             needIncreaseTermImmediately = false;
@@ -507,10 +519,15 @@ public class DLedgerLeaderElector {
 
         long startVoteTimeMs = System.currentTimeMillis();
         final List<CompletableFuture<VoteResponse>> quorumVoteResponses = voteForQuorumResponses(term, ledgerEndTerm, ledgerEndIndex);
+        // 统计本次投票过程中，各个节点的最新term情况，收集最大的term
         final AtomicLong knownMaxTermInGroup = new AtomicLong(term);
+        // 计数器，记录所有的投票响应的数量
         final AtomicInteger allNum = new AtomicInteger(0);
+        // 有效的响应(除未知外)
         final AtomicInteger validNum = new AtomicInteger(0);
+        // 投给本节点的票数
         final AtomicInteger acceptedNum = new AtomicInteger(0);
+        //
         final AtomicInteger notReadyTermNum = new AtomicInteger(0);
         final AtomicInteger biggerLedgerNum = new AtomicInteger(0);
         final AtomicBoolean alreadyHasLeader = new AtomicBoolean(false);
@@ -526,6 +543,8 @@ public class DLedgerLeaderElector {
                     if (x.getVoteResult() != VoteResponse.RESULT.UNKNOWN) {
                         validNum.incrementAndGet();
                     }
+                    // 这里加锁，其实可以细化？
+                    // todo 细化锁力度
                     synchronized (knownMaxTermInGroup) {
                         switch (x.getVoteResult()) {
                             case ACCEPT:
@@ -536,8 +555,15 @@ public class DLedgerLeaderElector {
                                 break;
                             case REJECT_TERM_SMALL_THAN_LEDGER:
                             case REJECT_EXPIRED_VOTE_TERM:
-                                if (x.getTerm() > knownMaxTermInGroup.get()) {
-                                    knownMaxTermInGroup.set(x.getTerm());
+                                // cas update
+                                for (;;) {
+                                    long maxTermInGroup = knownMaxTermInGroup.get();
+                                    if (x.getTerm() <= maxTermInGroup) {
+                                        break;
+                                    }
+                                    if (knownMaxTermInGroup.compareAndSet(maxTermInGroup, x.getTerm())) {
+                                        break;
+                                    }
                                 }
                                 break;
                             case REJECT_EXPIRED_LEDGER_TERM:
@@ -803,4 +829,52 @@ public class DLedgerLeaderElector {
         }
 
     }
+
+    public static void main(String[] args) throws InterruptedException {
+
+        ThreadPoolExecutor executorService = (ThreadPoolExecutor) Executors.newFixedThreadPool(10);
+
+        for (int n = 0; n < 10000; n++) {
+            System.out.println("开始");
+            CountDownLatch latch = new CountDownLatch(10);
+            CountDownLatch resultLatch = new CountDownLatch(10);
+
+            long[] terms = new long[]{ 86, 200, 100, 300, 45, 20, 45, 198, 396, 167 };
+
+            AtomicLong maxTerm = new AtomicLong(-1);
+            for (int i = 0; i < 4; i++) {
+                final int termIndex = i;
+                new Thread(() -> {
+                    try {
+                        latch.await();
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                    }
+                    long term = terms[termIndex];
+                    for (;;) {
+                        // 可能拿到的都是0
+                        long tempMaxTerm = maxTerm.get();
+                        if (term <= tempMaxTerm){
+                            break;
+                        }
+                        if (maxTerm.compareAndSet(tempMaxTerm, term)){
+                            break;
+                        }
+                    }
+                    resultLatch.countDown();
+                }).start();
+                latch.countDown();
+            }
+
+            resultLatch.await();
+
+            System.out.println(maxTerm.get());
+
+            if (maxTerm.get() != 396){
+                throw new RuntimeException();
+            };
+        }
+    }
+
+
 }
