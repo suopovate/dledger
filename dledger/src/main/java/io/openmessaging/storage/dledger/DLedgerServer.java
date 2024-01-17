@@ -129,12 +129,12 @@ public class DLedgerServer extends AbstractDLedgerServer {
     private final DLedgerRpcService dLedgerRpcService;
 
     /**
-     *
+     * 据说是什么代理服务要用，待定。
      */
     private final RpcServiceMode rpcServiceMode;
 
     /**
-     * raft 中负责心跳、日志复制的模块。
+     * raft 中负责日志复制的模块。
      *
      * 数据同步器(主要负责主节点与从节点的数据同步)
      *
@@ -153,10 +153,15 @@ public class DLedgerServer extends AbstractDLedgerServer {
 
     private final ScheduledExecutorService executorService;
 
+    /**
+     * 切换为leader时，添加一个empty commit，主要是用于同步其他follower数据。
+     *
+     * 因为raft协议规定，leader只能提交当前term对应的log，提交一个log，就是为了这个目的，加速同步commitIndex.
+     */
     private FastAdvanceCommitIndexService fastAdvanceCommitIndexService;
 
     /**
-     * raft中的状态机模块，这里主要是作为一个中转站，把节点的一些日志新增等事件，转发给状态机并执行
+     * raft中的状态机模块，这里主要是作为一个中转站，把节点的一些日志新增等事件，转存到队列，然后有一个独立线程异步执行
      */
     private StateMachineCaller fsmCaller;
 
@@ -196,6 +201,7 @@ public class DLedgerServer extends AbstractDLedgerServer {
         }
         this.fsmCaller = new StateMachineCaller(this.dLedgerStore, stateMachine, this.dLedgerEntryPusher);
         if (this.dLedgerConfig.isEnableFastAdvanceCommitIndex()) {
+            // response for commit current term log quickly
             this.fastAdvanceCommitIndexService = new FastAdvanceCommitIndexService();
             this.dLedgerLeaderElector.addRoleChangeHandler(this.fastAdvanceCommitIndexService);
         }
@@ -230,8 +236,11 @@ public class DLedgerServer extends AbstractDLedgerServer {
      */
     public synchronized void startup() {
         if (!isStarted) {
+            // 1. 启动存储器
             this.dLedgerStore.startup();
+            // 2. 启动状态机
             this.fsmCaller.start();
+            // 3. 状态机快照恢复
             Optional.ofNullable(this.fsmCaller.getSnapshotManager()).ifPresent(x -> {
                 try {
                     x.loadSnapshot().get();
@@ -241,11 +250,15 @@ public class DLedgerServer extends AbstractDLedgerServer {
                     throw new RuntimeException(e);
                 }
             });
+            // 4. 启动通信模块
             if (RpcServiceMode.EXCLUSIVE.equals(this.rpcServiceMode)) {
                 this.dLedgerRpcService.startup();
             }
+            // 5. 启动数据处理模块
             this.dLedgerEntryPusher.startup();
+            // 6. 启动选举模块
             this.dLedgerLeaderElector.startup();
+            // 定时检测是否要将当前leader的角色让位给优先级列表内的节点
             executorService.scheduleAtFixedRate(this::checkPreferredLeader, 1000, 1000, TimeUnit.MILLISECONDS);
             isStarted = true;
         }
@@ -385,6 +398,11 @@ public class DLedgerServer extends AbstractDLedgerServer {
         return this.appendAsLeader(Arrays.asList(body));
     }
 
+    /**
+     * 1. 同步写本地文件
+     * 2. 将收尾工作: 写回结果给客户端. 包装成一个closure.
+     * 3. 提交一个异步任务同步数据给其他peer
+     */
     public AppendFuture<AppendEntryResponse> appendAsLeader(List<byte[]> bodies) throws DLedgerException {
         PreConditions.check(memberState.isLeader(), DLedgerResponseCode.NOT_LEADER);
         if (bodies.size() == 0) {
@@ -415,14 +433,14 @@ public class DLedgerServer extends AbstractDLedgerServer {
         final DLedgerEntry finalResEntry = entry;
         final AppendFuture<AppendEntryResponse> finalFuture = future;
         final long totalBytesFinal = totalBytes;
-        finalFuture.handle((r, e) -> {
+        // 这里不应该使用handle
+        finalFuture.whenCompleteAsync((r, e) -> {
             if (e == null && r.getCode() == DLedgerResponseCode.SUCCESS.getCode()) {
                 Attributes attributes = DLedgerMetricsManager.newAttributesBuilder().build();
                 DLedgerMetricsManager.appendEntryLatency.record(watch.getTime(TimeUnit.MICROSECONDS), attributes);
                 DLedgerMetricsManager.appendEntryBatchCount.record(bodies.size(), attributes);
                 DLedgerMetricsManager.appendEntryBatchBytes.record(totalBytesFinal, attributes);
             }
-            return r;
         });
         Closure closure = new Closure() {
             @Override
@@ -599,6 +617,11 @@ public class DLedgerServer extends AbstractDLedgerServer {
         }
     }
 
+    /**
+     * 转让 leader，需要考虑哪些问题？
+     * 1. 接受方的数据是否符合要求？
+     * 2. 不符合要求则应该考虑将当前 leader数据同步。
+     */
     @Override
     public CompletableFuture<LeadershipTransferResponse> handleLeadershipTransfer(
         LeadershipTransferRequest request) throws Exception {
@@ -606,6 +629,7 @@ public class DLedgerServer extends AbstractDLedgerServer {
         try {
             PreConditions.check(memberState.getSelfId().equals(request.getRemoteId()), DLedgerResponseCode.UNKNOWN_MEMBER, "%s != %s", request.getRemoteId(), memberState.getSelfId());
             PreConditions.check(memberState.getGroup().equals(request.getGroup()), DLedgerResponseCode.UNKNOWN_GROUP, "%s != %s", request.getGroup(), memberState.getGroup());
+            // 如果 transferId == self 说明本节点就是需要做出转让的节点
             if (memberState.getSelfId().equals(request.getTransferId())) {
                 //It's the leader received the transfer command.
                 PreConditions.check(memberState.isPeerMember(request.getTransfereeId()), DLedgerResponseCode.UNKNOWN_MEMBER, "transferee=%s is not a peer member", request.getTransfereeId());
@@ -617,6 +641,8 @@ public class DLedgerServer extends AbstractDLedgerServer {
                 PreConditions.check(transfereeFallBehind < dLedgerConfig.getMaxLeadershipTransferWaitIndex(),
                     DLedgerResponseCode.FALL_BEHIND_TOO_MUCH, "transferee fall behind too much, diff=%s", transfereeFallBehind);
                 return dLedgerLeaderElector.handleLeadershipTransfer(request);
+
+                // 如果 transfereeId == self 说明本节点就是需要接受转让的节点
             } else if (memberState.getSelfId().equals(request.getTransfereeId())) {
                 // It's the transferee received the take leadership command.
                 PreConditions.check(request.getTransferId().equals(memberState.getLeaderId()), DLedgerResponseCode.INCONSISTENT_LEADER, "transfer=%s is not leader", request.getTransferId());
@@ -625,6 +651,7 @@ public class DLedgerServer extends AbstractDLedgerServer {
                 long startTime = System.currentTimeMillis();
                 long fallBehind = request.getTakeLeadershipLedgerIndex() - memberState.getLedgerEndIndex();
 
+                // 数据不一致，休眠，等待数据同步
                 while (fallBehind > 0) {
 
                     if (costTime > dLedgerConfig.getLeadershipTransferWaitTimeout()) {
@@ -676,6 +703,7 @@ public class DLedgerServer extends AbstractDLedgerServer {
         Iterator<String> it = preferredLeaderIds.iterator();
         while (it.hasNext()) {
             String preferredLeaderId = it.next();
+            // check if preferredLeaderId is a peer member and online
             if (!memberState.isPeerMember(preferredLeaderId)) {
                 it.remove();
                 LOGGER.warn("preferredLeaderId = {} is not a peer member", preferredLeaderId);
@@ -688,6 +716,7 @@ public class DLedgerServer extends AbstractDLedgerServer {
                 continue;
             }
 
+            // 落后太多的话,也先略过
             long fallBehind = dLedgerStore.getLedgerEndIndex() - dLedgerEntryPusher.getPeerWaterMark(memberState.currTerm(), preferredLeaderId);
             if (fallBehind >= dLedgerConfig.getMaxLeadershipTransferWaitIndex()) {
                 LOGGER.warn("preferredLeaderId = {} transferee fall behind index : {}", preferredLeaderId, fallBehind);
@@ -698,6 +727,7 @@ public class DLedgerServer extends AbstractDLedgerServer {
         if (preferredLeaderIds.size() == 0) {
             return;
         }
+        // 找出进度最高的
         long minFallBehind = Long.MAX_VALUE;
         String preferredLeaderId = preferredLeaderIds.get(0);
         for (String peerId : preferredLeaderIds) {
@@ -716,6 +746,7 @@ public class DLedgerServer extends AbstractDLedgerServer {
 
             try {
                 long startTransferTime = System.currentTimeMillis();
+                // 将Leader传给对应节点
                 LeadershipTransferResponse response = dLedgerLeaderElector.handleLeadershipTransfer(request).get();
                 LOGGER.info("transfer finished. request={},response={},cost={}ms", request, response, DLedgerUtils.elapsed(startTransferTime));
             } catch (Throwable t) {
@@ -802,6 +833,9 @@ public class DLedgerServer extends AbstractDLedgerServer {
         SHARED
     }
 
+    /**
+     * When member become the leader,we append a empty commit to log,to commit index fast.
+     */
     private class FastAdvanceCommitIndexService implements DLedgerLeaderElector.RoleChangeHandler {
 
         @Override

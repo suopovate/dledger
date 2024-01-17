@@ -29,11 +29,7 @@ import io.openmessaging.storage.dledger.utils.Pair;
 import io.openmessaging.storage.dledger.utils.PreConditions;
 import io.openmessaging.storage.dledger.utils.DLedgerUtils;
 import java.nio.ByteBuffer;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -129,6 +125,9 @@ public class DLedgerMmapFileStore extends DLedgerStore {
         }
     }
 
+    /**
+     * 检查文件数据是否丢失、并设置 data、index文件的flushed、committed位置等
+     */
     public void recover() {
         if (!hasRecovered.compareAndSet(false, true)) {
             return;
@@ -187,6 +186,8 @@ public class DLedgerMmapFileStore extends DLedgerStore {
                 PreConditions.check(entryTerm == termFromIndex, DLedgerResponseCode.DISK_ERROR, "term %d != %d", entryTerm, termFromIndex);
                 PreConditions.check(posFromIndex == mappedFile.getFileFromOffset(), DLedgerResponseCode.DISK_ERROR, "pos %d != %d", mappedFile.getFileFromOffset(), posFromIndex);
                 firstEntryIndex = entryIndex;
+                // execute to here means this file is valid, so we just break
+                // if the file is ok, means the pre file is ok too,we needn't check all files.
                 break;
             } catch (Throwable t) {
                 LOGGER.warn("Pre check data and index failed {}", mappedFile.getFileName(), t);
@@ -198,6 +199,7 @@ public class DLedgerMmapFileStore extends DLedgerStore {
         LOGGER.info("Begin to recover data from entryIndex={} fileIndex={} fileSize={} fileName={} ", firstEntryIndex, index, mappedFiles.size(), mappedFile.getFileName());
         long lastEntryIndex = -1;
         long lastEntryTerm = -1;
+        // always point to the next unChecked entry offset.
         long processOffset = mappedFile.getFileFromOffset();
         boolean needWriteIndex = false;
         while (true) {
@@ -207,6 +209,7 @@ public class DLedgerMmapFileStore extends DLedgerStore {
                 int magic = byteBuffer.getInt();
                 int size = byteBuffer.getInt();
                 if (magic == MmapFileList.BLANK_MAGIC_CODE) {
+                    // emm,if the entry is blank, it's still had some data?
                     processOffset += size;
                     if (relativePos + size == mappedFile.getFileSize()) {
                         // next file
@@ -294,6 +297,8 @@ public class DLedgerMmapFileStore extends DLedgerStore {
             System.exit(-1);
         }
 
+        // we found the last valid entry of last valid file.
+        // and the whole log is sequence.
         ledgerEndIndex = lastEntryIndex;
         ledgerEndTerm = lastEntryTerm;
         if (lastEntryIndex != -1) {
@@ -302,7 +307,10 @@ public class DLedgerMmapFileStore extends DLedgerStore {
             PreConditions.check(entry.getIndex() == lastEntryIndex, DLedgerResponseCode.DISK_ERROR, "recheck index %d != %d", entry.getIndex(), lastEntryIndex);
             reviseLedgerBeforeBeginIndex();
         }
+        // set the flush and commit position
         this.dataFileList.updateWherePosition(processOffset);
+        // truncate the data that behind the offset
+        // and set the wroteposition
         this.dataFileList.truncateOffset(processOffset);
         long indexProcessOffset = (lastEntryIndex + 1) * INDEX_UNIT_SIZE;
         this.indexFileList.updateWherePosition(indexProcessOffset);
@@ -796,6 +804,7 @@ public class DLedgerMmapFileStore extends DLedgerStore {
         }
 
         private boolean isTimeToDelete() {
+            // you can config the hour that delete data
             String when = DLedgerMmapFileStore.this.dLedgerConfig.getDeleteWhen();
             return DLedgerUtils.isItTimeToDo(when);
         }

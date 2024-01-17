@@ -86,8 +86,14 @@ public class DLedgerEntryPusher {
 
     private final Map<Long/*term*/, ConcurrentMap<Long/*index*/, Closure/*upper callback*/>> pendingClosure = new ConcurrentHashMap<>();
 
+    /**
+     *
+     */
     private final EntryHandler entryHandler;
 
+    /**
+     * 负责定时向整个集群查询当前最新的日志情况
+     */
     private final QuorumAckChecker quorumAckChecker;
 
     private final Map<String/*peer id*/, EntryDispatcher/*entry dispatcher for each peer*/> dispatcherMap = new HashMap<>();
@@ -285,6 +291,7 @@ public class DLedgerEntryPusher {
                 }
 
                 long currTerm = memberState.currTerm();
+                // init the map if not exists until
                 checkTermForPendingMap(currTerm, "QuorumAckChecker");
                 checkTermForWaterMark(currTerm, "QuorumAckChecker");
                 // clear pending closure in old term
@@ -331,6 +338,7 @@ public class DLedgerEntryPusher {
 
                 // calculate the median of watermarks(which we can ensure that more than half of the nodes have been pushed the corresponding entry)
                 // we can also call it quorumIndex
+                // like: 1 2 3 4 5, the quorumIndex pos is [5 / 2 = 2], the quorumIndex is 3.
                 Map<String, Long> peerWaterMarks = peerWaterMarksByTerm.get(currTerm);
                 List<Long> sortedWaterMarks = peerWaterMarks.values()
                     .stream()
@@ -666,9 +674,11 @@ public class DLedgerEntryPusher {
                 doCheckAppendResponse();
                 // check if now not new entries to be sent
                 if (writeIndex > dLedgerStore.getLedgerEndIndex()) {
+                    // send the remained entries in the batch request
                     if (this.batchAppendEntryRequest.getCount() > 0) {
                         sendBatchAppendEntryRequest();
                     } else {
+                        // no data to send,just tell the follower which is the newest index.
                         doCommit();
                     }
                     break;
@@ -679,6 +689,7 @@ public class DLedgerEntryPusher {
                     changeState(EntryDispatcherState.INSTALL_SNAPSHOT);
                     break;
                 }
+                // check if the send size over the limit or the check leak time arrive
                 if (pendingMap.size() >= maxPendingSize || DLedgerUtils.elapsed(lastCheckLeakTimeMs) > 1000) {
                     long peerWaterMark = getPeerWaterMark(term, peerId);
                     for (Map.Entry<Long, Pair<Long, Integer>> entry : pendingMap.entrySet()) {

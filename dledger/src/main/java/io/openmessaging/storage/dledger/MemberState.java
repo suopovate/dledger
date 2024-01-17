@@ -96,13 +96,23 @@ public class MemberState {
     private volatile long currTerm = 0;
     private volatile String currVoteFor;
 
+    /**
+     * the whole log's end index and term
+     */
     private volatile long ledgerEndIndex = -1;
     private volatile long ledgerEndTerm = -1;
     private long knownMaxTermInGroup = -1;
 
 
+    /**
+     * 如果当前节点接收到了 让出 Leader的请求，这个字段就会有值
+     * 代表当前接受本节点转让的节点 id
+     */
     // state for leadership transfer
     private volatile String transferee;
+    /**
+     * 接收方，接任时的新 term
+     */
     private volatile long termToTakeLeadership = -1;
 
     public MemberState(DLedgerConfig config) {
@@ -178,6 +188,7 @@ public class MemberState {
     }
 
     public synchronized void changeToLeader(long term) {
+        // 先升级term 再切换角色
         PreConditions.check(currTerm == term, DLedgerResponseCode.ILLEGAL_MEMBER_STATE, "%d != %d", currTerm, term);
         this.role = LEADER;
         this.leaderId = selfId;

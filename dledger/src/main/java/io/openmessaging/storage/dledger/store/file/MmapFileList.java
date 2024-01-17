@@ -30,8 +30,21 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+/**
+ * It's a list of {@link MmapFile}s.
+ * These files are sort by the {@link MmapFile#getFileFromOffset()};
+ * We think of it as a big file that store log entries.
+ * For the caller, just care about to put or get data base offset.
+ * We needn't handle the detail of specified file.
+ *
+ * 总结：
+ * 这个类，负责管理某一类数据的文件列表，对外可以将本类看作是一个整体来使用就行，其对外部屏蔽了对具体某个文件的寻址、删除、数据添加、位点管理等细节。
+ */
 public class MmapFileList {
     public static final int MIN_BLANK_LEN = 8;
+    /**
+     * this is not the file's magic, that's the entry's magic code.
+     */
     public static final int BLANK_MAGIC_CODE = -1;
     private static final Logger LOGGER = LoggerFactory.getLogger(MmapFile.class);
     private static final int DELETE_FILES_BATCH_MAX = 10;
@@ -51,6 +64,10 @@ public class MmapFileList {
         this.mappedFileSize = mappedFileSize;
     }
 
+    /**
+     * check the front file's data length is 'cur file start offset - pre file end offset'
+     * If it is not then the data is damaged
+     */
     public boolean checkSelf() {
         if (!this.mappedFiles.isEmpty()) {
             checkFirstFileAllBlank();
@@ -74,6 +91,7 @@ public class MmapFileList {
 
     /**
      * check if first file is full of blank (only happens in first file)
+     * if it is then we need to remove this file
      */
     public void checkFirstFileAllBlank() {
         MmapFile firstMappedFile = getFirstMappedFile();
@@ -93,6 +111,9 @@ public class MmapFileList {
         deleteExpiredFiles(removedMmapFiles);
     }
 
+    /**
+     * find the file that last modified timestamp >= timestamp
+     */
     public MmapFile getMappedFileByTime(final long timestamp) {
         Object[] mfs = this.copyMappedFiles();
 
@@ -117,6 +138,17 @@ public class MmapFileList {
         return this.mappedFiles.toArray();
     }
 
+    /**
+     * 两个作用：
+     * 1. 删除之后的文件
+     * 2. 设置 offset 定位到的文件的 wroteposition、committedposition、flushedposition
+     *
+     * delete the file that file's start bigger than offset.
+     * if the offset is between the file's start and end,
+     * then we don't remove it,
+     * we just set the wrote position to 'offset % mappedFileSize'.
+     * notice: truncated data include the offset
+     */
     public void truncateOffset(long offset) {
         Object[] mfs = this.copyMappedFiles();
         if (mfs == null) {
@@ -142,6 +174,9 @@ public class MmapFileList {
         this.deleteExpiredFiles(willRemoveFiles);
     }
 
+    /**
+     * delete the file
+     */
     void destroyExpiredFiles(List<MmapFile> files) {
         Collections.sort(files, (o1, o2) -> {
             if (o1.getFileFromOffset() < o2.getFileFromOffset()) {
@@ -163,6 +198,9 @@ public class MmapFileList {
         }
     }
 
+    /**
+     * 这个方法就是删除 offset之前的文件
+     */
     public void resetOffset(long offset) {
         Object[] mfs = this.copyMappedFiles();
         if (mfs == null) {
@@ -194,6 +232,7 @@ public class MmapFileList {
                         }
                     }
                 } else {
+                    // 如果 offset 大于文件的末尾，那么直接删除该文件
                     willRemoveFiles.add(file);
                 }
             }
@@ -269,11 +308,13 @@ public class MmapFileList {
             return -1;
         }
         MmapFile mappedFile = getLastMappedFile();
+        // the next writeable position
         long currPosition = mappedFile.getFileFromOffset() + mappedFile.getWrotePosition();
         if (!mappedFile.appendMessage(data, pos, len)) {
             LOGGER.error("Append error for {}", storePath);
             return -1;
         }
+        // so it's current data's position
         return currPosition;
     }
 
@@ -295,6 +336,9 @@ public class MmapFileList {
         return null;
     }
 
+    /**
+     * just remove from the list
+     */
     void deleteExpiredFiles(List<MmapFile> files) {
 
         if (!files.isEmpty()) {
@@ -353,10 +397,17 @@ public class MmapFileList {
         return true;
     }
 
+    /**
+     * 从后往前找，如果对应文件不存在，就直接创建
+     * 如果整个列表为空，那这个文件就会是第一个文件
+     * 注意：不要随意传 needCreate
+     * 1. 如果文件列表不为空，传的 offset过小，会导致文件列表乱序。
+     */
     public MmapFile getLastMappedFile(final long startOffset, boolean needCreate) {
         long createOffset = -1;
         MmapFile mappedFileLast = getLastMappedFile();
 
+        // createOffset must equals file from offset
         if (mappedFileLast == null) {
             createOffset = startOffset - (startOffset % this.mappedFileSize);
         } else if (mappedFileLast.isFull()) {
@@ -375,6 +426,9 @@ public class MmapFileList {
         return doCreateMappedFile(nextFilePath);
     }
 
+    /**
+     * 注意，创建文件不会排序...
+     */
     protected MmapFile doCreateMappedFile(String nextFilePath) {
         MmapFile mappedFile = null;
         try {
@@ -709,8 +763,11 @@ public class MmapFileList {
     }
 
     public boolean rebuildWithPos(long pos) {
+        // delete all data
         truncateOffset(-1);
+        // create the file,just only one file of this position in
         getLastMappedFile(pos);
+        // truncate again
         truncateOffset(pos);
         resetOffset(pos);
         return pos == getMaxWrotePosition() && pos == getMinOffset();

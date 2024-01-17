@@ -31,109 +31,122 @@ public class DLedgerConfig {
     public static final String MEMORY = "MEMORY";
     public static final String FILE = "FILE";
     public static final String MULTI_PATH_SPLITTER = System.getProperty("dLedger.multiPath.Splitter", ",");
+    private String configFilePath;  // 配置文件路径
 
-    private String configFilePath;
+    private String group = "default";  // 分组名称，默认为"default"
 
-    private String group = "default";
+    private String selfId = "n0";  // 当前节点的标识符，默认为"n0"
 
-    private String selfId = "n0";
+    private String peers = "n0-localhost:20911";  // 节点和对应主机地址的映射关系，默认为"n0-localhost:20911"
 
-    private String peers = "n0-localhost:20911";
+    private String storeBaseDir = File.separator + "tmp" + File.separator + "dledgerstore";  // 存储基础目录路径，默认为当前目录下的"tmp\dledgerstore"
 
-    private String storeBaseDir = File.separator + "tmp" + File.separator + "dledgerstore";
+    private String readOnlyDataStoreDirs = null;  // 仅读数据存储目录，默认为null
 
-    private String readOnlyDataStoreDirs = null;
+    private int peerPushThrottlePoint = 300 * 1024 * 1024;  // 节点间推送数据的限制点，默认为300MB
 
-    private int peerPushThrottlePoint = 300 * 1024 * 1024;
+    private int peerPushQuota = 20 * 1024 * 1024;  // 节点间推送数据的配额，默认为20MB
 
-    private int peerPushQuota = 20 * 1024 * 1024;
+    private String storeType = FILE; //FILE, MEMORY  // 存储类型，默认为FILE，表示文件存储
 
-    private String storeType = FILE; //FILE, MEMORY
-    private String dataStorePath;
+    private String dataStorePath;  // 数据存储路径
 
-    private int maxPendingRequestsNum = 10000;
+    private int maxPendingRequestsNum = 10000;  // 最大待处理请求数，默认为10000
 
-    private int maxWaitAckTimeMs = 2500;
+    private int maxWaitAckTimeMs = 2500;  // 最大等待确认时间，默认为2500ms
 
-    private int maxPushTimeOutMs = 1000;
+    private int maxPushTimeOutMs = 1000;  // 最大推送超时时间，默认为1000ms
 
     /**
      * 是否开启leader选举功能，即当前节点具备选举和角色切换的能力，不开启的话，本节点就不会主动切换角色，或者维护当前角色。
      * false: 估计就是永远都是follow?
      */
-    private boolean enableLeaderElector = true;
+    private boolean enableLeaderElector = true;  // 是否启用leader选举，默认为true
 
-    private int heartBeatTimeIntervalMs = 2000;
+    private int heartBeatTimeIntervalMs = 2000;  // 心跳间隔时间，默认为2000ms
 
-    private int maxHeartBeatLeak = 3;
+    private int maxHeartBeatLeak = 3;  // 最大心跳泄漏数，默认为3
 
-    private int minVoteIntervalMs = 300;
-    private int maxVoteIntervalMs = 1000;
+    private int minVoteIntervalMs = 300;  // 最小选举间隔时间，默认为300ms
 
-    private int fileReservedHours = 72;
-    private String deleteWhen = "04";
+    private int maxVoteIntervalMs = 1000;  // 最大选举间隔时间，默认为1000ms
 
-    private float diskSpaceRatioToCheckExpired = Float.parseFloat(System.getProperty("dledger.disk.ratio.check", "0.70"));
-    private float diskSpaceRatioToForceClean = Float.parseFloat(System.getProperty("dledger.disk.ratio.clean", "0.85"));
+    private int fileReservedHours = 72;  // 保留文件的时间长度，默认为72小时
 
-    private boolean enableDiskForceClean = true;
+    private String deleteWhen = "04";  // 文件删除的时间，格式为HH，默认为"04"表示4点
 
-    private long flushFileInterval = 10;
+    private float diskSpaceRatioToCheckExpired = Float.parseFloat(System.getProperty("dledger.disk.ratio.check", "0.70"));  // 检查过期数据的磁盘空间比例，默认为System.getProperty("dledger.disk.ratio.check")的值，若不存在则默认为0.70
 
-    private long checkPointInterval = 3000;
+    private float diskSpaceRatioToForceClean = Float.parseFloat(System.getProperty("dledger.disk.ratio.clean", "0.85"));  // 强制清理数据的磁盘空间比例，默认为System.getProperty("dledger.disk.ratio.clean")的值，若不存在则默认为0.85
 
-    private int mappedFileSizeForEntryData = 1024 * 1024 * 1024;
-    private int mappedFileSizeForEntryIndex = DLedgerMmapFileStore.INDEX_UNIT_SIZE * 5 * 1024 * 1024;
+    private boolean enableDiskForceClean = true;  // 是否启用强制清理数据，默认为true
 
-    private boolean enablePushToFollower = true;
+    private long flushFileInterval = 10;  // 刷新文件的间隔时间，默认为10ms
 
-    private String preferredLeaderIds;
-    private long maxLeadershipTransferWaitIndex = 1000;
-    private int minTakeLeadershipVoteIntervalMs = 30;
-    private int maxTakeLeadershipVoteIntervalMs = 100;
+    private long checkPointInterval = 3000;  // 检查点的间隔时间，默认为3000ms
 
-    private boolean isEnableBatchAppend = false;
+    private int mappedFileSizeForEntryData = 1024 * 1024 * 1024;  // 数据条目数据的映射文件大小，默认为1GB
+
+    private int mappedFileSizeForEntryIndex = DLedgerMmapFileStore.INDEX_UNIT_SIZE * 5 * 1024 * 1024;  // 数据条目索引的映射文件大小，默认为DLedgerMmapFileStore.INDEX_UNIT_SIZE * 5 * 1024 * 1024
+
+    private boolean enablePushToFollower = true;  // 是否启用将数据推送到follower节点，默认为true
+
+    private String preferredLeaderIds;  // 偏好的leader节点ID
+
+    private long maxLeadershipTransferWaitIndex = 1000;  // 最大领导权转移等待索引，默认为1000
+
+    private int minTakeLeadershipVoteIntervalMs = 30;  // 最小获取领导权的选举间隔时间，默认为30ms
+
+    private int maxTakeLeadershipVoteIntervalMs = 100;  // 最大获取领导权的选举间隔时间，默认为100ms
+
+    private boolean isEnableBatchAppend = false;  // 是否启用批量追加数据，默认为false
 
     // max size in bytes for each append request
-    private int maxBatchAppendSize = 4 * 1024;
+    private int maxBatchAppendSize = 4 * 1024;  // 每个追加请求的最大大小，默认为4KB
 
-    private long leadershipTransferWaitTimeout = 1000;
+    private long leadershipTransferWaitTimeout = 1000;  // 领导权转移等待超时时间，默认为1000ms
 
-    private boolean enableSnapshot = false;
+    private boolean enableSnapshot = false;  // 是否启用快照，默认为false
 
-    private SnapshotEntryResetStrategy snapshotEntryResetStrategy = SnapshotEntryResetStrategy.RESET_ALL_SYNC;
+    private SnapshotEntryResetStrategy snapshotEntryResetStrategy = SnapshotEntryResetStrategy.RESET_ALL_SYNC;  // 快照条目重置策略，默认为RESET_ALL_SYNC
 
-    private int snapshotThreshold = 1000;
+    private int snapshotThreshold = 1000;  // 快照阈值，默认为1000
 
-    private int resetSnapshotEntriesDelayTime = 5 * 1000;
+    private int resetSnapshotEntriesDelayTime = 5 * 1000;  // 重置快照条目延迟时间，默认为5000ms
 
     /**
-     * reset snapshot entries but keep last entries num.
-     * .e.g 10, when we load from snapshot which lastIncludedIndex = 100, we will delete the entries in (..., 90]
+     * 重置快照条目但保留最后的条目数。
+     * 例如，当从属于快照的最后包含索引等于100时，我们将删除（..., 90]
      */
-    private int resetSnapshotEntriesButKeepLastEntriesNum = 10;
-    private int maxSnapshotReservedNum = 3;
+    private int resetSnapshotEntriesButKeepLastEntriesNum = 10;  // 保留的最后条目数，默认为10
+
+    private int maxSnapshotReservedNum = 3;  // 保留的最大快照数，默认为3
 
     // max interval in ms for each append request
-    private int maxBatchAppendIntervalMs = 1000;
+    private int maxBatchAppendIntervalMs = 1000;  // 每个追加请求的最大间隔时间，默认为1000ms
 
     /**
-     * When node change from candidate to leader, it maybe always keep the old commit index although this index's entry has been
-     * replicated to more than half of the nodes (it will keep until a new entry is appended in current term).
-     * The reason why this scenario happens is that leader can't commit the entries which are belong to the previous term.
+     * 当节点从候选人角色转变为领导者角色时，可能一直保持旧的提交索引，即使此索引的条目已经复制到超过一半的节点（
+     * 它将保持到当前任期中的新条目被追加）。
+     * 这种情况发生的原因是领导者无法提交前一个任期中的条目。
      */
-    private boolean enableFastAdvanceCommitIndex = false;
+    private boolean enableFastAdvanceCommitIndex = false;  // 是否启用快速推进提交索引，默认为false
 
-    private MetricsExporterType metricsExporterType = MetricsExporterType.DISABLE;
+    private MetricsExporterType metricsExporterType = MetricsExporterType.DISABLE;  // 指标导出类型，默认为DISABLE
 
-    private String metricsGrpcExporterTarget = "";
-    private String metricsGrpcExporterHeader = "";
-    private long metricGrpcExporterTimeOutInMills = 3 * 1000;
-    private long metricGrpcExporterIntervalInMills = 60 * 1000;
-    private long metricLoggingExporterIntervalInMills = 10 * 1000;
+    private String metricsGrpcExporterTarget = "";  // 指标gRPC导出目标
 
-    private int metricsPromExporterPort = 5557;
-    private String metricsPromExporterHost = "";
+    private String metricsGrpcExporterHeader = "";  // 指标gRPC导出头部信息
+
+    private long metricGrpcExporterTimeOutInMills = 3 * 1000;  // 指标gRPC导出超时时间，默认为3000ms
+
+    private long metricGrpcExporterIntervalInMills = 60 * 1000;  // 指标gRPC导出间隔时间，默认为60000ms
+
+    private long metricLoggingExporterIntervalInMills = 10 * 1000;  // 指标日志导出间隔时间，默认为10000ms
+
+    private int metricsPromExporterPort = 5557;  // 指标Prometheus导出端口号，默认为5557
+
+    private String metricsPromExporterHost = "";  // 指标Prometheus导出主机地址，默认为空
 
     public String getDefaultPath() {
         return storeBaseDir + File.separator + "dledger-" + selfId;

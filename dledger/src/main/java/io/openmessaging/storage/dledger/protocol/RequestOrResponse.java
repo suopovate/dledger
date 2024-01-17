@@ -35,6 +35,9 @@ public class RequestOrResponse {
 
     protected String leaderId = null;
 
+    /**
+     * 发起请求时的 term
+     */
     protected long term = -1;
 
     public String getGroup() {

@@ -40,6 +40,16 @@ import org.slf4j.LoggerFactory;
 /**
  * 选举器(基于每个节点的memberState，处理跟选举相关的所有逻辑)
  *
+ * 主要负责维持节点当前的状态，整体目标是维持集群中leader-follower的关系。
+ * 主动行为包括：
+ *  a. follower检测是否心跳超时，超时需升级为candidate
+ *  b. candidate进行选举操作
+ *  c. leader持续进行心跳维持
+ * 被动行为包括：
+ *  a. 处理其他节点的心跳请求
+ *  b. 处理其他节点的投票请求
+ *
+ * term: 任期。
  * 其实这个term有点类似于 朝代 ... 从时间上看，朝代永远是从前往后 增长的，而且每个朝代有每个朝代的 leader，所以每个term都要重新选举，只是类似这种模式，
  * 不要太在意，否则容易影响对协议整体的理解。
  */
@@ -172,6 +182,9 @@ public class DLedgerLeaderElector {
                 // 请求的term大于当前节点的term，可能当前是主或者candidate，follower...
                 // 假如当前是follower，也没必要立马变成candidate吧？
                 // 估计是dledger的优化逻辑，raft协议这种情况是立马变成follower。
+
+                // 现在的情况是，只要收到更高的 term心跳(说明选出了新朝代的leader)，就立马升级为候选者
+                // 然后立马升级term，
                 //To make it simple, for larger term, do not change to follower immediately
                 //first change to candidate, and notify the state-maintainer thread
                 changeRoleToCandidate(request.getTerm());
@@ -188,6 +201,8 @@ public class DLedgerLeaderElector {
      * 如果term不一致，就直接警告退出。
      * (基本就是当前term因为某些原因，升级了，比如有一个canditate突然成了leader，并给当前节点发送了心跳，导致term升级)
      * 记住：leader这个状态，是跟term强绑定的，你选举成功永远只局限在某个term，每次term更替，就要重新选举。
+     *
+     * @param term 在当前term赢得选举
      */
     public void changeRoleToLeader(long term) {
         synchronized (memberState) {
@@ -202,6 +217,14 @@ public class DLedgerLeaderElector {
         }
     }
 
+    /**
+     * 1. 超时未收到心跳，转成candidate(raft协议标准约定)
+     * 2. 收到了其他leader节点的心跳，且发现term高于本节点，可能会收到很多次同一term的心跳，然后多次调用本方法。
+     * 3. 作为leader发送心跳时，发现term高于本节点，也会调本方法。
+     * 3. 发起选举，发现了更高的term时。
+     *
+     * @param term 在当前term成为了candidate，这个term不是本节点应该发起选举的term，而是导致本节点变成candidate的term
+     */
     public void changeRoleToCandidate(long term) {
         synchronized (memberState) {
             if (term >= memberState.currTerm()) {
@@ -308,12 +331,17 @@ public class DLedgerLeaderElector {
      * @throws Exception
      */
     private void sendHeartbeats(long term, String leaderId) throws Exception {
+        // 记录各个节点心跳的发送情况
         final AtomicInteger allNum = new AtomicInteger(1);
         final AtomicInteger succNum = new AtomicInteger(1);
+        // 这个有点迷惑
         final AtomicInteger notReadyNum = new AtomicInteger(0);
         final AtomicLong maxTerm = new AtomicLong(-1);
         final AtomicBoolean inconsistLeader = new AtomicBoolean(false);
+
+        // 要么全部心跳都返回/要么超过半数心跳成功就可以解除await
         final CountDownLatch beatLatch = new CountDownLatch(1);
+
         long startHeartbeatTimeMs = System.currentTimeMillis();
         // 向池子里所有节点发送
         for (String id : memberState.getPeerMap().keySet()) {
@@ -374,7 +402,9 @@ public class DLedgerLeaderElector {
             });
         }
         long voteResultWaitTime = 10;
+        // 除固定等待时间外的等待时间
         beatLatch.await(heartBeatTimeIntervalMs - voteResultWaitTime, TimeUnit.MILLISECONDS);
+        // 固定等待时间 10ms
         Thread.sleep(voteResultWaitTime);
 
         //abnormal case, deal with it immediately
@@ -404,6 +434,7 @@ public class DLedgerLeaderElector {
         if (DLedgerUtils.elapsed(lastSendHeartBeatTime) > heartBeatTimeIntervalMs) {
             long term;
             String leaderId;
+            // 加锁是为了防止 term 和 leaderId 出现不一致
             synchronized (memberState) {
                 if (!memberState.isLeader()) {
                     //stop sending
@@ -465,13 +496,14 @@ public class DLedgerLeaderElector {
     }
 
     /**
-     * 获取下一次发起投票的时间
+     * 获取下一次发起投票的时间 300-1000ms之间
      */
     private long getNextTimeToRequestVote() {
         if (isTakingLeadership()) {
             return System.currentTimeMillis() + dLedgerConfig.getMinTakeLeadershipVoteIntervalMs() +
                     random.nextInt(dLedgerConfig.getMaxTakeLeadershipVoteIntervalMs() - dLedgerConfig.getMinTakeLeadershipVoteIntervalMs());
         }
+        // 随机超时是随机的 300 - 1000 之间的时间内
         return System.currentTimeMillis() + minVoteIntervalMs + random.nextInt(maxVoteIntervalMs - minVoteIntervalMs);
     }
 
@@ -493,6 +525,7 @@ public class DLedgerLeaderElector {
         }
         // 加锁更新和获取term、获取当前最尾日志的数据
         synchronized (memberState) {
+            // 比如，我们收到了跟本节点同一term的leader的心跳，就会从candidate恢复回follower
             if (!memberState.isCandidate()) {
                 return;
             }
@@ -502,7 +535,7 @@ public class DLedgerLeaderElector {
                 // 更新term
                 term = memberState.nextTerm();
                 LOGGER.info("{}_[INCREASE_TERM] from {} to {}", memberState.getSelfId(), prevTerm, term);
-                // 等待重新vote
+                // 等待发起vote，但是不会升级term
                 lastParseResult = VoteResponse.ParseResult.WAIT_TO_REVOTE;
             } else {
                 term = memberState.currTerm();
@@ -511,6 +544,7 @@ public class DLedgerLeaderElector {
             ledgerEndTerm = memberState.getLedgerEndTerm();
         }
         // 这个标志的作用只是为了增加term，然后下次再进行选举
+        // 假如节点落后leader 的 term很多的话，这时候，应该会接收到下一次的心跳
         if (needIncreaseTermImmediately) {
             nextTimeToRequestVote = getNextTimeToRequestVote();
             needIncreaseTermImmediately = false;
@@ -527,7 +561,6 @@ public class DLedgerLeaderElector {
         final AtomicInteger validNum = new AtomicInteger(0);
         // 投给本节点的票数
         final AtomicInteger acceptedNum = new AtomicInteger(0);
-        //
         final AtomicInteger notReadyTermNum = new AtomicInteger(0);
         final AtomicInteger biggerLedgerNum = new AtomicInteger(0);
         final AtomicBoolean alreadyHasLeader = new AtomicBoolean(false);
@@ -606,6 +639,7 @@ public class DLedgerLeaderElector {
         lastVoteCost = DLedgerUtils.elapsed(startVoteTimeMs);
         VoteResponse.ParseResult parseResult;
         if (knownMaxTermInGroup.get() > term) {
+            // 发现已知的term大于本节点，升级一次，并且重新转为candidate，即发现了新的term
             parseResult = VoteResponse.ParseResult.WAIT_TO_VOTE_NEXT;
             nextTimeToRequestVote = getNextTimeToRequestVote();
             changeRoleToCandidate(knownMaxTermInGroup.get());
@@ -655,6 +689,8 @@ public class DLedgerLeaderElector {
             // 判断当前是否很久没收到心跳，是的话就升级为candidate，但是注意，这里没有升级term
             maintainAsFollower();
         } else {
+            // 1. 选举超时时间到达，执行选举
+            // 2. 立即更新term，则立即升级一次term
             maintainAsCandidate();
         }
     }
@@ -702,6 +738,8 @@ public class DLedgerLeaderElector {
 
             memberState.setTransferee(request.getTransfereeId());
         }
+
+        // 构建转让请求
         LeadershipTransferRequest takeLeadershipRequest = new LeadershipTransferRequest();
         takeLeadershipRequest.setGroup(memberState.getGroup());
         takeLeadershipRequest.setLeaderId(memberState.getLeaderId());
@@ -716,6 +754,7 @@ public class DLedgerLeaderElector {
             return CompletableFuture.completedFuture(new LeadershipTransferResponse().term(memberState.currTerm()).code(DLedgerResponseCode.EXPIRED_TERM.getCode()));
         }
 
+        // 发往实际节点
         return dLedgerRpcService.leadershipTransfer(takeLeadershipRequest).thenApply(response -> {
             synchronized (memberState) {
                 if (response.getCode() != DLedgerResponseCode.SUCCESS.getCode() ||
@@ -728,6 +767,9 @@ public class DLedgerLeaderElector {
         });
     }
 
+    /**
+     * 接收方：处理leader转让请求, 将当前节点转为candidate ,竞选leader
+     */
     public CompletableFuture<LeadershipTransferResponse> handleTakeLeadership(
             LeadershipTransferRequest request) {
         LOGGER.debug("handleTakeLeadership.request={}", request);
@@ -842,7 +884,7 @@ public class DLedgerLeaderElector {
             long[] terms = new long[]{ 86, 200, 100, 300, 45, 20, 45, 198, 396, 167 };
 
             AtomicLong maxTerm = new AtomicLong(-1);
-            for (int i = 0; i < 4; i++) {
+            for (int i = 0; i < 10; i++) {
                 final int termIndex = i;
                 new Thread(() -> {
                     try {
@@ -852,7 +894,7 @@ public class DLedgerLeaderElector {
                     }
                     long term = terms[termIndex];
                     for (;;) {
-                        // 可能拿到的都是0
+                        // 可能拿到的都是同一个值
                         long tempMaxTerm = maxTerm.get();
                         if (term <= tempMaxTerm){
                             break;

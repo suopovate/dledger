@@ -59,6 +59,9 @@ public class DefaultMmapFile extends ReferenceResource implements MmapFile {
     }
 
     private volatile int startPosition = 0;
+    /**
+     * writeable position
+     */
     private volatile int wrotePosition = 0;
     private volatile int committedPosition = 0;
     private volatile int flushedPosition = 0;
@@ -128,7 +131,7 @@ public class DefaultMmapFile extends ReferenceResource implements MmapFile {
             invoke(invoke(viewed(buffer), "cleaner"), "clean");
         }
     }
-    
+
     private static void invokeAfterJava8(final ByteBuffer buffer) {
         try {
             Field field = Unsafe.class.getDeclaredField("theUnsafe");
@@ -140,7 +143,7 @@ public class DefaultMmapFile extends ReferenceResource implements MmapFile {
             throw new IllegalStateException(e);
         }
     }
-    
+
     private static Object invoke(final Object target, final String methodName, final Class<?>... args) {
         return AccessController.doPrivileged((PrivilegedAction<Object>) () -> {
             try {
@@ -166,7 +169,7 @@ public class DefaultMmapFile extends ReferenceResource implements MmapFile {
         if (!buffer.isDirect()) {
             throw new IllegalArgumentException("buffer is non-direct");
         }
-        
+
         ByteBuffer viewedBuffer = (ByteBuffer) ((DirectBuffer) buffer).attachment();
         if (viewedBuffer == null) {
             return buffer;
@@ -214,6 +217,7 @@ public class DefaultMmapFile extends ReferenceResource implements MmapFile {
             ByteBuffer byteBuffer = this.mappedByteBuffer.slice();
             byteBuffer.position(currentPos);
             byteBuffer.put(data, offset, length);
+            // increase the write position by atomic
             WROTE_POSITION_UPDATER.addAndGet(this, length);
             return true;
         }

@@ -56,6 +56,7 @@ public class DLedgerClient {
         updatePeers(peers);
         dLedgerClientRpcService = new DLedgerClientRpcNettyService();
         dLedgerClientRpcService.updatePeers(peers);
+        // 随便找一个当成 leaderId来发？
         leaderId = peerMap.keySet().iterator().next();
     }
 

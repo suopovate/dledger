@@ -95,7 +95,7 @@ public class VoteResponse extends RequestOrResponse {
 
     public enum ParseResult {
         /**
-         * 重新选举
+         * 重新选举，不会升级term
          */
         WAIT_TO_REVOTE,
         /**
@@ -107,7 +107,7 @@ public class VoteResponse extends RequestOrResponse {
          */
         PASSED,
         /**
-         * 等待进行一次新的选举
+         * 等待进行一次新的选举，会升级term
          */
         WAIT_TO_VOTE_NEXT;
     }

@@ -18,12 +18,18 @@ package io.openmessaging.storage.dledger.protocol;
 
 public class LeadershipTransferRequest extends RequestOrResponse {
 
+    /**
+     * 现在的 leader Id
+     */
     private String transferId;
     /**
-     * 成为leader的一方
-     * 受让方 id
+     * 即将成为leader的一方
+     * 接受方的 id
      */
     private String transfereeId;
+    /**
+     * 现在的 leader 的 最新日志 index
+     */
     private long takeLeadershipLedgerIndex;
 
     public String getTransfereeId() {
